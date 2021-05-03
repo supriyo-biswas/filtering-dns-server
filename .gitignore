@@ -1,0 +1,6 @@
+/data/
+/.vagrant
+/venv
+*.py[co]
+*.log
+*.DS_Store
