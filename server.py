@@ -32,6 +32,43 @@ allowed_rdtypes = [
 ]
 
 
+class DomainTrie:
+    def __init__(self):
+        self.root = {}
+        self.end_symbol = 0
+
+    def add(self, domain, status):
+        ref = self.root
+        for index, part in enumerate(reversed(domain.split('.'))):
+            if index == 0 and not part:
+                continue
+
+            if part not in ref:
+                ref[part] = {}
+
+            ref = ref[part]
+
+        ref[self.end_symbol] = status
+
+    def lookup(self, domain):
+        ref = self.root
+        status = False
+        for index, part in enumerate(reversed(domain.split('.'))):
+            if index == 0 and not part:
+                continue
+
+            if part not in ref:
+                break
+
+            try:
+                ref = ref[part]
+                status = ref.get(self.end_symbol, status)
+            except KeyError:
+                break
+
+        return status
+
+
 def setup_nameservers():
     if 'nameservers' in config:
         dns.resolver.default_resolver = dns.resolver.Resolver(configure=False)
@@ -45,11 +82,12 @@ def get_config(conf=None):
         with open(conf) as f:
             config = json.load(f)
 
-    for entry in ['blacklist', 'whitelist']:
-        if entry not in config:
-            config[entry] = set()
-        else:
-            config[entry] = {i + '.' for i in config[entry]}
+    config['domains'] = DomainTrie()
+    for domain in config.get('blacklist', []):
+        config['domains'].add(domain.encode('idna').decode(), True)
+
+    for domain in config.get('whitelist', []):
+        config['domains'].add(domain.encode('idna').decode(), False)
 
     if 'redis_socket_file' not in config:
         for sockfile in [
@@ -70,20 +108,6 @@ def get_config(conf=None):
     config['ratelimits'].setdefault('enabled', True)
 
     return config
-
-
-def is_blacklisted_host(host):
-    while host:
-        if host in config['whitelist']:
-            return False
-
-        if host in config['blacklist']:
-            return True
-
-        index = host.find('.')
-        host = host[index + 1 :]
-
-    return False
 
 
 def ratelimited(ip):
@@ -122,9 +146,9 @@ def dns_query(name, rdclass, rdtype):
         if cached_result is not None:
             return pickle.loads(cached_result)
 
-        if is_blacklisted_host(name):
+        if config['domains'].lookup(name):
             rv = (dns.rcode.NXDOMAIN, [], [], [])
-            expiration = 3600
+            expiration = 0
         else:
             result = dns.resolver.query(name, rdtype, raise_on_no_answer=False)
             response = result.response
@@ -145,8 +169,10 @@ def dns_query(name, rdclass, rdtype):
             rcode = dns.rcode.SERVFAIL
         rv = (rcode, [], [], [])
 
-    redis_conn.set(key, pickle.dumps(rv))
-    redis_conn.expire(key, expiration)
+    if expiration > 0:
+        redis_conn.set(key, pickle.dumps(rv))
+        redis_conn.expire(key, expiration)
+
     return rv
 
 

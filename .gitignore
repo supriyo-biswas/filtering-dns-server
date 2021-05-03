@@ -1,6 +1,7 @@
 /data/
 /.vagrant
 /venv
+/.vscode
 *.py[co]
 *.log
 *.DS_Store
